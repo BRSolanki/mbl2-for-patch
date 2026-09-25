@@ -9,18 +9,16 @@ use std::{
     mem::transmute,
     ops::{Deref, DerefMut},
     os::unix::ffi::OsStrExt,
-    path::{Path, PathBuf},
+    path::Path,
     pin::Pin,
 };
 
 pub enum BufferCursor {
-    Vec(Cursor<Vec<u8>>),
     Cxx(Cursor<StackString>),
 }
 impl Read for BufferCursor {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
-            Self::Vec(v) => v.read(buf),
             Self::Cxx(cxx) => cxx.read(buf),
         }
     }
@@ -28,7 +26,6 @@ impl Read for BufferCursor {
 impl Seek for BufferCursor {
     fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
         match self {
-            Self::Vec(v) => v.seek(pos),
             Self::Cxx(cxx) => cxx.seek(pos),
         }
     }
@@ -36,13 +33,11 @@ impl Seek for BufferCursor {
 impl BufferCursor {
     pub fn position(&self) -> u64 {
         match self {
-            Self::Vec(v) => v.position(),
             Self::Cxx(cxx) => cxx.position(),
         }
     }
     pub fn get_ref(&self) -> &[u8] {
         match self {
-            Self::Vec(v) => v.get_ref(),
             Self::Cxx(cxx) => cxx.get_ref().as_ref(),
         }
     }
@@ -57,22 +52,13 @@ macro_rules! folder_list {
     }
 }
 
-pub struct FileLoader {
-    pub last_buffer: Option<Buffer>,
-}
+pub struct FileLoader;
 impl FileLoader {
     pub fn new() -> Self {
-        Self { last_buffer: None }
+        Self
     }
-    pub fn get_file(&mut self, path: &Path) -> Option<Buffer> {
+    pub fn get_file(&self, path: &Path) -> Option<Buffer> {
         let stripped = path.strip_prefix("assets/").unwrap_or(path);
-        // if let Some(mut cache) = self.last_buffer.take_if(|c| c.name == path) {
-        //     log::info!("Cache hit!: {:#?}", path);
-        //     cache
-        //         .rewind()
-        //         .expect("Unable to rewind in a memory buffer?, impossible");
-        //     return Some(cache);
-        // }
         let replacement_list = folder_list! {
             apk: "gui/dist/hbui/" -> pack: "hbui/",
             apk: "skin_packs/persona/" -> pack: "persona/",
@@ -96,7 +82,7 @@ impl FileLoader {
                 };
                 log::info!("Loaded ResourcePack file: {}", cpppath.as_ref());
                 let buffer = BufferCursor::Cxx(Cursor::new(stack_str));
-                let cache = Buffer::new(path.to_path_buf(), buffer);
+                let cache = Buffer::new(buffer);
                 // ResourceLocation gets dropped (also cxx_storage if its not needed)
                 return Some(cache);
             }
@@ -105,12 +91,11 @@ impl FileLoader {
     }
 }
 pub struct Buffer {
-    name: PathBuf,
     object: BufferCursor,
 }
 impl Buffer {
-    pub fn new(name: PathBuf, object: BufferCursor) -> Self {
-        Self { name, object }
+    pub fn new(object: BufferCursor) -> Self {
+        Self { object }
     }
 }
 impl Deref for Buffer {
