@@ -1,8 +1,7 @@
 //Explanation: Aasset is NOT thread-safe anyways so we will not try adding thread safety either
 #![allow(static_mut_refs)]
 use crate::{
-    jniopts::FAFAFILES,
-    loader::{Buffer, BufferCursor, FileLoader},
+    loader::{Buffer, FileLoader},
     LockResultExt,
 };
 use libc::{c_char, c_int, c_void, off64_t, off_t, size_t};
@@ -10,10 +9,9 @@ use ndk_sys::{AAsset, AAssetManager};
 use std::{
     collections::HashMap,
     ffi::{CStr, OsStr},
-    io::{self, Cursor, Read, Seek},
+    io::{self, Read, Seek},
     os::unix::ffi::OsStrExt,
     path::Path,
-    //    ptr,
     sync::{LazyLock, Mutex},
 };
 static mut MC_FILELOADER: LazyLock<FileLoader> = LazyLock::new(|| FileLoader::new());
@@ -39,18 +37,7 @@ pub unsafe extern "C" fn open(
     let os_str = OsStr::from_bytes(raw_cstr);
 
     let c_path: &Path = Path::new(os_str);
-    let stripped = c_path.strip_prefix("assets").unwrap_or(c_path);
 
-    let files = FAFAFILES.lock().ignore_poison();
-    let file = files.iter().find(|d| d.name == stripped);
-    if let Some(fafafile) = file {
-        let data = Cursor::new(fafafile.data.clone());
-        let data = BufferCursor::Vec(data);
-        let mut lock = WANTED_ASSETS.lock().ignore_poison();
-        lock.insert(AAssetPtr(asset), Buffer::new(c_path.to_path_buf(), data));
-    }
-
-    //    let mut sus = MC_FILELOADER.lock().ignore_poison();
     if let Some(yay) = MC_FILELOADER.get_file(c_path) {
         WANTED_ASSETS
             .lock()
@@ -132,9 +119,8 @@ pub unsafe extern "C" fn rem64(aasset: *mut AAsset) -> off64_t {
 
 pub unsafe extern "C" fn close(aasset: *mut AAsset) {
     let mut wanted_assets = WANTED_ASSETS.lock().ignore_poison();
-    // if let Some(buffer) = wanted_assets.remove(&AAssetPtr(aasset)) {
-    //     MC_FILELOADER.last_buffer = Some(buffer);
-    // }
+    // Remove our buffer entry so the HashMap doesn't grow unbounded
+    wanted_assets.remove(&AAssetPtr(aasset));
     ndk_sys::AAsset_close(aasset);
 }
 

@@ -6,12 +6,10 @@ use std::{
     sync::{LockResult, Mutex},
 };
 mod aasset;
-mod jniopts;
 mod plthook;
 use crate::{loader::ResourcePackManager, plthook::replace_plt_functions};
 use bhook::hook_fn;
 use bstr::ByteSlice;
-//use bstr::ByteSlice;
 use atoi::FromRadix16;
 use plt_rs::DynamicLibrary;
 use tinypatscan::Pattern;

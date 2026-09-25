@@ -10,7 +10,6 @@ bhook = { version = "0.1.2", git = "https://github.com/mcbegamerxx954/bhook" }
 bstr = "1.12.0"
 ctor = "0.4.1"
 cxx = "1.0.128"
-jni = "0.21.1"
 libc = "0.2.159"
 log = "0.4.22"
 memchr = "2.7.5"
