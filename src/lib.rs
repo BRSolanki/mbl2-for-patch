@@ -1,12 +1,12 @@
 #[deny(clippy::indexing_slicing)]
 mod cpp_string;
 mod loader;
+mod aasset;
+mod plthook;
 use std::{
     fs,
     sync::{LockResult, Mutex},
 };
-mod aasset;
-mod plthook;
 use crate::{loader::ResourcePackManager, plthook::replace_plt_functions};
 use bhook::hook_fn;
 use bstr::ByteSlice;
@@ -16,26 +16,25 @@ use tinypatscan::Pattern;
 
 #[cfg(target_arch = "aarch64")]
 const RPMC_PATTERNS: [Pattern; 5] = [
-
-        // v26.50
+    // v26.50
     Pattern::from_str("?? ?? ?? D1 ?? ?? ?? A9 ?? ?? ?? F9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? 91 ?? ?? ?? D5 F6 03 03 2A F5 03 02 AA ?? ?? ?? F9 F3 03 00 AA"),
-     // v26.40
+    // v26.40
     Pattern::from_str("?? ?? ?? D1 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? 91 ?? ?? ?? D5 F6 03 03 2A F5 03 02 AA ?? ?? ?? F9 F3 03 00 AA"),
-    //1.21.120.4
+    // 1.21.120.4
     Pattern::from_str("FF ?? 02 D1 FD 7B ?? A9 ?? ?? ?? ?? FA 67 ?? A9 F8 5F ?? A9 F6 57 ?? A9 F4 4F ?? A9 FD ?? 01 91 ?? D0 3B D5 ?? 03 03 2A ?? 03 02 AA ?? 17 40 F9 F3 03 00 AA A8 83 1F F8"),
-    // V1.21.60.21
+    // 1.21.60.21
     Pattern::from_str("FF 83 02 D1 FD 7B 06 A9 FD 83 01 91 F8 5F 07 A9 F6 57 08 A9 F4 4F 09 A9 58 D0 3B D5 F6 03 03 2A 08 17 40 F9 F5 03 02 AA F3 03 00 AA A8 83 1F F8 28 10 40 F9 28 01 00 B4"),
-    // V1.19.50-1.21.50
+    // 1.19.50 – 1.21.50
     Pattern::from_str("FF 03 03 D1 FD 7B 07 A9 FD C3 01 91 F9 43 00 F9 F8 5F 09 A9 F6 57 0A A9 F4 4F 0B A9 59 D0 3B D5 F6 03 03 2A 28 17 40 F9 F5 03 02 AA F3 03 00 AA A8 83 1F F8 28 10 40 F9"),
 ];
 
 #[cfg(target_arch = "arm")]
 const RPMC_PATTERNS: [Pattern; 2] = [
-    //1.21.120.4
+    // 1.21.120.4
     Pattern::from_str(
         "F0 B5 03 AF 2D E9 00 0F 8B B0 82 46 DF F8 ?? ?? 9B 46 91 46 78 44 00 68 00 68 0A 90",
     ),
-    // V1.21.110-1.19.50
+    // 1.21.110 – 1.19.50
     Pattern::from_str(
         "F0 B5 03 AF 2D E9 00 ?? ?? B0 ?? 46 ?? 48 98 46 92 46 78 44 00 68 00 68 ?? 90 08 69",
     ),
@@ -47,71 +46,55 @@ const RPMC_PATTERNS: [Pattern; 2] = [
     Pattern::from_str("55 41 57 41 56 53 48 83 EC ? 41 89 CF 49 89 D6 48 89 FB 64 48 8B 04 25 28 00 00 00 48 89 44 24 ? 48 8B 7E"),
 ];
 
-// Just setup the logger so we see those logcats
 pub fn setup_logging() {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Trace),
+        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
 }
+
 #[ctor::ctor]
 fn safe_setup() {
     setup_logging();
-    std::panic::set_hook(Box::new(move |panic_info| {
+    std::panic::set_hook(Box::new(|panic_info| {
         log::error!("Thread crashed: {}", panic_info);
     }));
-    // Let it crash and burn if anything happens
     main();
 }
+
 fn main() {
-    log::info!("Starting, mbl2 version v0.1.12");
+    log::info!("Starting mbl2 v0.1.12");
     let mcmaps = find_minecraft_library_manually()
         .expect("Cannot find libminecraftpe.so in memory maps - device not supported");
-    let addr = find_signatures(&RPMC_PATTERNS, &mcmaps).expect("No signature was found");
+    let addr = find_signatures(&RPMC_PATTERNS, &mcmaps).expect("No RPM signature found");
     log::info!("Hooking ResourcePackManager constructor");
-    unsafe {
-        rpm_ctor::hook_address(addr as *mut u8);
-    };
+    unsafe { rpm_ctor::hook_address(addr as *mut u8) };
     log::info!("Hooking AssetManager functions");
-    hook_aaset();
+    hook_aasset();
 }
-// A very minimal map range
-#[derive(Debug)]
+
+// ── /proc/self/maps parsing ──────────────────────────────────────────────────
+
+/// Minimal memory map range (start addr + size).
 struct SimpleMapRange {
     start: usize,
     size: usize,
 }
 
-impl SimpleMapRange {
-    /// Get the address where this range starts
-    const fn start(&self) -> usize {
-        self.start
-    }
-
-    /// Get the address where this range ends
-    const fn size(&self) -> usize {
-        self.size
-    }
-}
-
 fn find_minecraft_library_manually() -> Result<Vec<SimpleMapRange>, Box<dyn std::error::Error>> {
     let contents = fs::read("/proc/self/maps")?;
-    let mut ranges = Vec::new();
-    for line in contents.lines() {
-        if line.trim_ascii().is_empty() {
-            continue;
-        }
-        // Not too pretty but this method prevents crashes
-        let Some((addr_start, addr_end)) = parse_range(line) else {
-            continue;
-        };
-        let start = usize::from_radix_16(addr_start).0;
-        let end = usize::from_radix_16(addr_end).0;
-        log::info!("Found libminecraftpe.so region at: {:x}-{:x}", start, end);
-        ranges.push(SimpleMapRange {
-            start,
-            size: end - start,
-        });
-    }
+    let ranges: Vec<SimpleMapRange> = contents
+        .lines()
+        .filter_map(|line| {
+            if line.trim_ascii().is_empty() {
+                return None;
+            }
+            let (addr_start, addr_end) = parse_range(line)?;
+            let start = usize::from_radix_16(addr_start).0;
+            let end = usize::from_radix_16(addr_end).0;
+            log::info!("Found libminecraftpe.so region: {:x}-{:x}", start, end);
+            Some(SimpleMapRange { start, size: end - start })
+        })
+        .collect();
 
     if ranges.is_empty() {
         Err("libminecraftpe.so not found in memory maps".into())
@@ -119,102 +102,102 @@ fn find_minecraft_library_manually() -> Result<Vec<SimpleMapRange>, Box<dyn std:
         Ok(ranges)
     }
 }
-/// Separated into function due to option spam
+
+/// Parse one line from /proc/self/maps, returning `(start_hex, end_hex)` bytes
+/// only for executable regions belonging to libminecraftpe.so.
+#[inline]
 fn parse_range(buf: &[u8]) -> Option<(&[u8], &[u8])> {
-    let mut line = buf.split(|v| v.is_ascii_whitespace());
-    let addr_range = line.next()?;
-    let perms = line.next()?;
-    let pathname = line.next_back()?;
+    let mut fields = buf.split(|b| b.is_ascii_whitespace());
+    let addr_range = fields.next()?;
+    let perms = fields.next()?;
+    let pathname = fields.next_back()?;
     if perms.contains(&b'x') && pathname.ends_with(b"libminecraftpe.so") {
         return addr_range.split_once_str(b"-");
     }
     None
 }
 
+// ── signature scanning ───────────────────────────────────────────────────────
+
 fn find_signatures(signatures: &[Pattern], ranges: &[SimpleMapRange]) -> Option<*const u8> {
     for sig in signatures {
         for range in ranges {
-            let libbytes =
-                unsafe { core::slice::from_raw_parts(range.start() as *const u8, range.size()) };
-            let addr = sig.search(libbytes, tinypatscan::Algorithm::Simd);
-            if let Some(val) = addr {
-                let addr = unsafe { libbytes.as_ptr().byte_add(val) };
+            let lib_bytes =
+                unsafe { core::slice::from_raw_parts(range.start as *const u8, range.size) };
+            if let Some(offset) = sig.search(lib_bytes, tinypatscan::Algorithm::Simd) {
+                let addr = unsafe { lib_bytes.as_ptr().byte_add(offset) };
                 #[cfg(target_arch = "arm")]
                 let addr = unsafe { addr.offset(1) };
                 log::info!(
-                    "Found signature in region {:x}-{:x} at offset {:x}",
-                    range.start(),
-                    range.start() + range.size(),
-                    val
+                    "Signature matched in {:x}-{:x} at offset {:x}",
+                    range.start,
+                    range.start + range.size,
+                    offset
                 );
                 return Some(addr);
             }
         }
-        log::error!("Cannot find signature in any region");
+        log::error!("Signature not found in any region");
     }
     None
 }
 
+// ── PLT hooking ──────────────────────────────────────────────────────────────
+
 macro_rules! cast_array {
-    ($($func_name:literal -> $hook:expr),
-        *,
-    ) => {
-        [
-            $(($func_name, $hook as *const u8)),*,
-        ]
+    ($($func_name:literal -> $hook:expr),* $(,)?) => {
+        [$(($func_name, $hook as *const u8)),*]
     }
 }
-/// Set up the asset manager hooks so we control APK file access
-pub fn hook_aaset() {
-    let lib_entry = find_lib("libminecraftpe").expect("Cannot find minecraftpe");
-    let dyn_lib = DynamicLibrary::initialize(lib_entry).expect("Failed to find mc info");
-    // Functions of aasset
+
+/// Hook all AAsset* PLT entries in libminecraftpe.so.
+fn hook_aasset() {
+    let lib_entry = find_lib("libminecraftpe").expect("Cannot find libminecraftpe");
+    let dyn_lib = DynamicLibrary::initialize(lib_entry).expect("Failed to parse libminecraftpe ELF");
     let asset_fn_list = cast_array! {
-        "AAssetManager_open" -> aasset::open,
-        "AAsset_read" -> aasset::read,
-        "AAsset_close" -> aasset::close,
-        "AAsset_seek" -> aasset::seek,
-        "AAsset_seek64" -> aasset::seek64,
-        "AAsset_getLength" -> aasset::len,
-        "AAsset_getLength64" -> aasset::len64,
-        "AAsset_getRemainingLength" -> aasset::rem,
-        "AAsset_getRemainingLength64" -> aasset::rem64,
-        "AAsset_openFileDescriptor" -> aasset::fd_dummy,
-        "AAsset_openFileDescriptor64" -> aasset::fd_dummy64,
-        "AAsset_getBuffer" -> aasset::get_buffer,
-        "AAsset_isAllocated" -> aasset::is_alloc,
+        "AAssetManager_open"         -> aasset::open,
+        "AAsset_read"                -> aasset::read,
+        "AAsset_close"               -> aasset::close,
+        "AAsset_seek"                -> aasset::seek,
+        "AAsset_seek64"              -> aasset::seek64,
+        "AAsset_getLength"           -> aasset::len,
+        "AAsset_getLength64"         -> aasset::len64,
+        "AAsset_getRemainingLength"  -> aasset::rem,
+        "AAsset_getRemainingLength64"-> aasset::rem64,
+        "AAsset_openFileDescriptor"  -> aasset::fd_dummy,
+        "AAsset_openFileDescriptor64"-> aasset::fd_dummy64,
+        "AAsset_getBuffer"           -> aasset::get_buffer,
+        "AAsset_isAllocated"         -> aasset::is_alloc,
     };
-    //The actual work
     replace_plt_functions(&dyn_lib, asset_fn_list);
 }
-/// Find some library's PLT
+
 fn find_lib<'a>(target_name: &str) -> Option<plt_rs::LoadedLibrary<'a>> {
-    let loaded_modules = plt_rs::collect_modules();
-    loaded_modules
+    plt_rs::collect_modules()
         .into_iter()
         .find(|lib| lib.name().contains(target_name))
 }
-// A resource pack manager object
+
+// ── Global state ─────────────────────────────────────────────────────────────
+
+/// The captured ResourcePackManager instance, set once by the rpm_ctor hook.
 pub static PACKM_OBJ: Mutex<Option<ResourcePackManager>> = Mutex::new(None);
-// The resource pack manager load function
-// pub static RPM_LOAD: OnceLock<RpmLoadFn> = OnceLock::new();
 
 hook_fn! {
-    fn rpm_ctor(this: *mut libc::c_void,unk1: usize,unk2: usize,needs_init: bool) -> *mut libc::c_void = {
-
+    fn rpm_ctor(this: *mut libc::c_void, unk1: usize, unk2: usize, needs_init: bool) -> *mut libc::c_void = {
         use crate::loader::ResourcePackManager;
         use crate::LockResultExt;
-        log::info!("rpm ctor called");
+        log::info!("rpm_ctor called");
         let result = call_original(this, unk1, unk2, needs_init);
-        log::info!("RPM pointer has been obtained");
         *crate::PACKM_OBJ.lock().ignore_poison() = Some(ResourcePackManager::wrap(this));
-
-        // Not doing this just adds overhead
+        // Disable the hook — we only need the pointer once
         self_disable();
-        log::info!("hook exit");
+        log::info!("rpm_ctor done");
         result
     }
 }
+
+// ── Utilities ────────────────────────────────────────────────────────────────
 
 pub trait LockResultExt {
     type Guard;

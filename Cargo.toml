@@ -12,32 +12,29 @@ ctor = "0.4.1"
 cxx = "1.0.128"
 libc = "0.2.159"
 log = "0.4.22"
-memchr = "2.7.5"
 ndk-sys = "0.6.0"
-once_cell = "1.20.2"
-page_size = "0.6.0"
 plt-rs = "0.4.0"
 region = "3.0.2"
-scroll = "0.13.0"
 tinypatscan = { git = "https://github.com/mcbegamerxx954/tinypatscan", version = "0.1.1" }
 
 [profile.release]
 # This lib gets called from nowhere and so unwinding = crash
 panic = "abort"
+opt-level = "z"      # optimize for size
+lto = true           # link-time optimization strips dead code across crates
+codegen-units = 1    # single codegen unit = better inlining + smaller output
+strip = true         # strip symbols
 
 [profile.githubci]
 inherits = "release"
-strip = true
-lto = true 
-codegen-units = 1 
 debug = false
-panic = "abort"
 
 [lib]
 crate-type = ["cdylib"]
 
 [build-dependencies]
 cc = "1.1.24"
+
 [lints.clippy]
 indexing_slicing = "deny"
 unwrap_used = "deny"

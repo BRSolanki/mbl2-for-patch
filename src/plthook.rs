@@ -78,7 +78,11 @@ pub fn get_function_table<'a>(
         let iter = collect_entries!(dyn_relas, dyn_symbols, string_table);
         hashmap.extend(iter);
     }
-    None
+    if hashmap.is_empty() {
+        None
+    } else {
+        Some(hashmap)
+    }
 }
 
 // /// Finding target function differs on 32 bit and 64 bit.

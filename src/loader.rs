@@ -3,45 +3,17 @@ use crate::{
     LockResultExt,
 };
 use cxx::CxxString;
-// use ndk::asset::AssetManager;
 use std::{
-    io::{self, Cursor, Read, Seek, Write},
+    io::{Cursor, Read, Seek, Write},
     mem::transmute,
-    ops::{Deref, DerefMut},
     os::unix::ffi::OsStrExt,
     path::Path,
     pin::Pin,
 };
 
-pub enum BufferCursor {
-    Cxx(Cursor<StackString>),
-}
-impl Read for BufferCursor {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Self::Cxx(cxx) => cxx.read(buf),
-        }
-    }
-}
-impl Seek for BufferCursor {
-    fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
-        match self {
-            Self::Cxx(cxx) => cxx.seek(pos),
-        }
-    }
-}
-impl BufferCursor {
-    pub fn position(&self) -> u64 {
-        match self {
-            Self::Cxx(cxx) => cxx.position(),
-        }
-    }
-    pub fn get_ref(&self) -> &[u8] {
-        match self {
-            Self::Cxx(cxx) => cxx.get_ref().as_ref(),
-        }
-    }
-}
+/// A loaded resource-pack file ready for reading.
+pub type Buffer = Cursor<StackString>;
+
 macro_rules! folder_list {
     ($( apk: $apk_folder:literal -> pack: $pack_folder:expr),
         *,
@@ -52,87 +24,60 @@ macro_rules! folder_list {
     }
 }
 
-pub struct FileLoader;
-impl FileLoader {
-    pub fn new() -> Self {
-        Self
-    }
-    pub fn get_file(&self, path: &Path) -> Option<Buffer> {
-        let stripped = path.strip_prefix("assets/").unwrap_or(path);
-        let replacement_list = folder_list! {
-            apk: "gui/dist/hbui/" -> pack: "hbui/",
-            apk: "skin_packs/persona/" -> pack: "persona/",
-            apk: "renderer/" -> pack: "renderer/",
-            apk: "resource_packs/vanilla/cameras/" -> pack: "vanilla_cameras/",
-        };
-        for replacement in replacement_list {
-            // Remove the prefix we want to change
-            if let Ok(file) = stripped.strip_prefix(replacement.0) {
-                let mut resource_loc = ResourceLocation::new();
-                let mut cpppath = ResourceLocation::get_path(&mut resource_loc);
-                opt_path_join(cpppath.as_mut(), &[Path::new(replacement.1), file]);
-                let packm = crate::PACKM_OBJ.lock().ignore_poison();
-                let Some(packm) = packm.as_ref() else {
-                    log::error!("ResourcePackManager ptr is null");
-                    return None;
-                };
-                let Some(stack_str) = packm.load_resource(resource_loc) else {
-                    log::info!("Cannot find file: {}", cpppath.as_ref());
-                    return None;
-                };
-                log::info!("Loaded ResourcePack file: {}", cpppath.as_ref());
-                let buffer = BufferCursor::Cxx(Cursor::new(stack_str));
-                let cache = Buffer::new(buffer);
-                // ResourceLocation gets dropped (also cxx_storage if its not needed)
-                return Some(cache);
-            }
+/// Try to load `path` from the active resource pack.
+/// Returns `None` if the path doesn't map to any resource-pack folder or the
+/// file doesn't exist in the pack.
+#[inline]
+pub fn get_pack_file(path: &Path) -> Option<Buffer> {
+    let stripped = path.strip_prefix("assets/").unwrap_or(path);
+    let replacement_list = folder_list! {
+        apk: "gui/dist/hbui/"              -> pack: "hbui/",
+        apk: "skin_packs/persona/"         -> pack: "persona/",
+        apk: "renderer/"                   -> pack: "renderer/",
+        apk: "resource_packs/vanilla/cameras/" -> pack: "vanilla_cameras/",
+    };
+    for (apk_prefix, pack_prefix) in replacement_list {
+        if let Ok(file) = stripped.strip_prefix(apk_prefix) {
+            let mut resource_loc = ResourceLocation::new();
+            let mut cpppath = ResourceLocation::get_path(&mut resource_loc);
+            path_join_into(cpppath.as_mut(), &[Path::new(pack_prefix), file]);
+            let packm = crate::PACKM_OBJ.lock().ignore_poison();
+            let Some(packm) = packm.as_ref() else {
+                log::error!("ResourcePackManager ptr is null");
+                return None;
+            };
+            let Some(stack_str) = packm.load_resource(resource_loc) else {
+                log::debug!("Not in pack: {}", cpppath.as_ref());
+                return None;
+            };
+            log::debug!("Pack hit: {}", cpppath.as_ref());
+            return Some(Cursor::new(stack_str));
         }
-        None
     }
-}
-pub struct Buffer {
-    object: BufferCursor,
-}
-impl Buffer {
-    pub fn new(object: BufferCursor) -> Self {
-        Self { object }
-    }
-}
-impl Deref for Buffer {
-    type Target = BufferCursor;
-    fn deref(&self) -> &Self::Target {
-        &self.object
-    }
-}
-impl DerefMut for Buffer {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.object
-    }
+    None
 }
 
 // This lint is not really applicable
 #[allow(clippy::unused_io_amount)]
-/// Join paths directly into a c++ string
-fn opt_path_join(mut bytes: Pin<&mut CxxString>, paths: &[&Path]) {
+/// Write joined path segments directly into a C++ string, pre-reserving capacity.
+fn path_join_into(mut out: Pin<&mut CxxString>, paths: &[&Path]) {
     let total_len: usize = paths.iter().map(|p| p.as_os_str().len()).sum();
-    bytes.as_mut().reserve(total_len);
-    let mut writer = bytes;
+    out.as_mut().reserve(total_len);
     for path in paths {
-        let osstr = path.as_os_str().as_bytes();
-        writer
-            .write(osstr)
-            .expect("Error while writing path to stack path");
+        out.write(path.as_os_str().as_bytes())
+            .expect("Error while writing path into CxxString");
     }
 }
+
 pub struct ResourcePackManager(*mut libc::c_void);
-// Technically we can pass this everywhere as its just a handle basically
-//unsafe impl Sync for ResourcePackManager {}
 unsafe impl Send for ResourcePackManager {}
 impl ResourcePackManager {
+    #[inline]
     pub fn wrap(ptr: *mut libc::c_void) -> Self {
         Self(ptr)
     }
     pub fn load_resource(&self, loc: ResourceLocation) -> Option<StackString> {
+        // Walk vtable: vtable[2] is the load function
         let vptr = unsafe { *transmute::<*mut libc::c_void, *mut *mut *const u8>(self.0) };
         let loadfn = unsafe {
             transmute::<
