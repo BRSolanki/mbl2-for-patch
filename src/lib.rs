@@ -63,9 +63,17 @@ fn safe_setup() {
 
 fn main() {
     log::info!("Starting mbl2 v0.1.12");
-    let mcmaps = find_minecraft_library_manually()
-        .expect("Cannot find libminecraftpe.so in memory maps - device not supported");
-    let addr = find_signatures(&RPMC_PATTERNS, &mcmaps).expect("No RPM signature found");
+    let mcmaps = match find_minecraft_library_manually() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!("Cannot find libminecraftpe.so in memory maps: {e}");
+            return;
+        }
+    };
+    let Some(addr) = find_signatures(&RPMC_PATTERNS, &mcmaps) else {
+        log::error!("No RPM signature matched — unsupported MC version, bailing out");
+        return;
+    };
     log::info!("Hooking ResourcePackManager constructor");
     unsafe { rpm_ctor::hook_address(addr as *mut u8) };
     log::info!("Hooking AssetManager functions");
@@ -152,8 +160,20 @@ macro_rules! cast_array {
 
 /// Hook all AAsset* PLT entries in libminecraftpe.so.
 fn hook_aasset() {
-    let lib_entry = find_lib("libminecraftpe").expect("Cannot find libminecraftpe");
-    let dyn_lib = DynamicLibrary::initialize(lib_entry).expect("Failed to parse libminecraftpe ELF");
+    let lib_entry = match find_lib("libminecraftpe") {
+        Some(e) => e,
+        None => {
+            log::error!("Cannot find libminecraftpe in loaded modules — PLT hooks skipped");
+            return;
+        }
+    };
+    let dyn_lib = match DynamicLibrary::initialize(lib_entry) {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("Failed to parse libminecraftpe ELF: {e:?} — PLT hooks skipped");
+            return;
+        }
+    };
     let asset_fn_list = cast_array! {
         "AAssetManager_open"         -> aasset::open,
         "AAsset_read"                -> aasset::read,

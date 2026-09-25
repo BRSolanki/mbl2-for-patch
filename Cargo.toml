@@ -15,15 +15,16 @@ log = "0.4.22"
 ndk-sys = "0.6.0"
 plt-rs = "0.4.0"
 region = "3.0.2"
+rustc-hash = "2"
 tinypatscan = { git = "https://github.com/mcbegamerxx954/tinypatscan", version = "0.1.1" }
 
 [profile.release]
-# This lib gets called from nowhere and so unwinding = crash
+# This lib is called from nowhere — unwinding into abort is the only safe option
 panic = "abort"
-opt-level = "z"      # optimize for size
-lto = true           # link-time optimization strips dead code across crates
-codegen-units = 1    # single codegen unit = better inlining + smaller output
-strip = true         # strip symbols
+opt-level = 3        # speed over size — LTO + single CGU already handles dead-code elimination
+lto = true           # link-time optimization strips dead code across all crates
+codegen-units = 1    # single codegen unit = best inlining across the whole crate graph
+strip = true         # strip symbols from the final .so
 
 [profile.githubci]
 inherits = "release"

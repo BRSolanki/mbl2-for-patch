@@ -1,10 +1,9 @@
 // Explanation: AAsset is NOT thread-safe anyway, so we don't add thread safety here either.
-#![allow(static_mut_refs)]
 use crate::{loader::Buffer, LockResultExt};
 use libc::{c_char, c_int, c_void, off64_t, off_t, size_t};
 use ndk_sys::{AAsset, AAssetManager};
+use rustc_hash::FxHashMap;
 use std::{
-    collections::HashMap,
     ffi::{CStr, OsStr},
     io::{self, Read, Seek},
     os::unix::ffi::OsStrExt,
@@ -13,14 +12,20 @@ use std::{
 };
 
 // Newtype so raw AAsset pointers can be used as HashMap keys.
-// All we do is compare the pointer value — the Mutex ensures safe access.
+// All we do is compare the pointer value — the Mutex ensures exclusive access.
 #[derive(PartialEq, Eq, Hash)]
 struct AAssetPtr(*const ndk_sys::AAsset);
+// SAFETY: we never dereference the pointer, only compare it as a usize key.
 unsafe impl Send for AAssetPtr {}
 
 /// Assets we have intercepted — maps AAsset* -> our in-memory buffer.
-static mut WANTED_ASSETS: LazyLock<Mutex<HashMap<AAssetPtr, Buffer>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// FxHashMap is used here because:
+///   - Keys are pointer-sized integers — SipHash's DoS resistance is wasted.
+///   - This is the hottest lock in the library (every AAsset call hits it).
+///   - FxHash is ~2-3x faster than SipHash for integer/pointer keys.
+/// `LazyLock<Mutex<_>>` already provides interior mutability, so no `static mut` needed.
+static WANTED_ASSETS: LazyLock<Mutex<FxHashMap<AAssetPtr, Buffer>>> =
+    LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 // ── open ────────────────────────────────────────────────────────────────────
 
@@ -127,7 +132,8 @@ pub unsafe extern "C" fn rem(aasset: *mut AAsset) -> off_t {
         return ndk_sys::AAsset_getRemainingLength(aasset);
     };
     let total = file.get_ref().as_ref().len();
-    handle_result!((total - file.position() as usize).try_into())
+    // saturating_sub guards against position() > total (e.g. after SEEK_END + positive offset)
+    handle_result!(total.saturating_sub(file.position() as usize).try_into())
 }
 
 pub unsafe extern "C" fn rem64(aasset: *mut AAsset) -> off64_t {
@@ -136,7 +142,7 @@ pub unsafe extern "C" fn rem64(aasset: *mut AAsset) -> off64_t {
         return ndk_sys::AAsset_getRemainingLength64(aasset);
     };
     let total = file.get_ref().as_ref().len();
-    handle_result!((total - file.position() as usize).try_into())
+    handle_result!(total.saturating_sub(file.position() as usize).try_into())
 }
 
 pub unsafe extern "C" fn close(aasset: *mut AAsset) {
