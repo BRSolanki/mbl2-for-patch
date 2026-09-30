@@ -58,7 +58,10 @@ fn safe_setup() {
     std::panic::set_hook(Box::new(|panic_info| {
         log::error!("Thread crashed: {}", panic_info);
     }));
-    main();
+    // Run on a background thread so we don't block dlopen() / the UI thread.
+    // The pattern scan + PLT hooks finish in ~100-200ms, well before Minecraft
+    // starts loading shaders, so there is no practical race.
+    std::thread::spawn(main);
 }
 
 fn main() {
@@ -99,7 +102,7 @@ fn find_minecraft_library_manually() -> Result<Vec<SimpleMapRange>, Box<dyn std:
             let (addr_start, addr_end) = parse_range(line)?;
             let start = usize::from_radix_16(addr_start).0;
             let end = usize::from_radix_16(addr_end).0;
-            log::info!("Found libminecraftpe.so region: {:x}-{:x}", start, end);
+            log::debug!("Found libminecraftpe.so region: {:x}-{:x}", start, end);
             Some(SimpleMapRange { start, size: end - start })
         })
         .collect();
