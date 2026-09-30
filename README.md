@@ -1,16 +1,17 @@
 # MaterialBinLoader 2
-A well optimized loader for the block game, stripped of MB Loader app JNI bindings and optimized for direct Smali injection into the Minecraft APK.
+A well optimized loader for the block game, stripped of MB Loader app JNI bindings and optimized for direct injection into the Minecraft APK.
 
 # Features
 - Supports loading materialbins, camera files, and replacing existing oreui files
 - Low overhead on every asset call
 - No crashes on unsupported MC versions — fails soft, not hard
-- No JNI / MB Loader app bindings — designed for direct Smali injection into the Minecraft APK
+- No JNI / MB Loader app bindings — designed for direct injection into the Minecraft APK
+- Two injection methods: **patchelf** (recommended) or **smali**
 - Low size
 
 > [!NOTE]
 > This fork has the MB Loader app JNI layer removed (`addCustomFile`, `setAutofixVersions`, etc.).
-> It is intended to be injected directly into the Minecraft APK via Smali, **not** loaded through an external launcher app.
+> It is intended to be injected directly into the Minecraft APK, **not** loaded through an external launcher app.
 
 > [!CAUTION]
 > MBL2 is not responsible for what happens to your shaders after a Minecraft update.
@@ -71,11 +72,62 @@ A well optimized loader for the block game, stripped of MB Loader app JNI bindin
 cargo build --release --target {android target triple here}
 ```
 
-## Injecting via Smali
+# Injection
 
-The compiled `.so` must be loaded via a `System.loadLibrary` call injected into the Minecraft APK's smali.
+There are two methods to inject MBL2 into a Minecraft APK. **Patchelf is recommended** — it doesn't touch Java/dex code, so it can't break popups, Xbox sign-in, or Activity lifecycle behavior.
+
 The library initializes itself automatically via `#[ctor]` — no explicit Java/JNI call is needed.
 If the MC version is unsupported (no signature match), the library exits cleanly without crashing the game.
+
+## Method 1: Patchelf (Recommended)
+
+Add `libfusembl2.so` as a `DT_NEEDED` dependency to `libminecraftpe.so`. The Android linker will load it automatically — **no smali/dex modification required**.
+
+### Steps
+
+1. **Build** the `.so` (see above) or grab a release binary.
+
+2. **Copy** the compiled `libfusembl2.so` into the APK's native lib directory:
+   ```
+   lib/arm64-v8a/libfusembl2.so    # for arm64
+   lib/armeabi-v7a/libfusembl2.so  # for arm32
+   ```
+
+3. **Patch** `libminecraftpe.so` to depend on it:
+   ```bash
+   patchelf --add-needed libfusembl2.so lib/arm64-v8a/libminecraftpe.so
+   ```
+
+4. **Re-sign** the APK and install.
+
+That's it. When Minecraft loads `libminecraftpe.so`, the linker automatically loads `libfusembl2.so` as a dependency, and the `#[ctor]` initializer sets up all hooks.
+
+### How it works
+
+```
+Java calls System.loadLibrary("minecraftpe")
+  └─ Linker maps libminecraftpe.so into memory
+  └─ Linker sees DT_NEEDED: libfusembl2.so
+      └─ Loads & maps libfusembl2.so
+      └─ Runs #[ctor] → spawns background thread
+          └─ Pattern-scans libminecraftpe.so (already mapped)
+          └─ Installs PLT hooks for AAsset* functions
+  └─ Runs libminecraftpe.so constructors
+  └─ Returns to Java
+```
+
+### Why patchelf is better than smali
+
+| | Patchelf | Smali |
+|---|---|---|
+| Dex/Java modification | **None** | Yes |
+| Risk of popup/lifecycle breakage | **Zero** | Possible if placed wrong |
+| Load ordering | **Automatic** (linker handles it) | Manual |
+| Hooks installed before MC code runs | **Yes** | Depends on placement |
+
+## Method 2: Smali (Alternative)
+
+If you can't use patchelf, you can inject a `System.loadLibrary` call into the Minecraft APK's smali code instead.
 
 ### Where to inject
 
