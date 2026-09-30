@@ -72,6 +72,86 @@ cargo build --release --target {android target triple here}
 ```
 
 ## Injecting via Smali
-Load the compiled `.so` from your Smali patch using `System.loadLibrary` or `Runtime.loadLibrary`.
+
+The compiled `.so` must be loaded via a `System.loadLibrary` call injected into the Minecraft APK's smali.
 The library initializes itself automatically via `#[ctor]` — no explicit Java/JNI call is needed.
 If the MC version is unsupported (no signature match), the library exits cleanly without crashing the game.
+
+### Where to inject
+
+Add the `loadLibrary` call inside the **static initializer** (`<clinit>`) of `com/mojang/minecraftpe/MainActivity.smali`, **after** the `minecraftpe` library is loaded.
+
+> [!IMPORTANT]
+> MBL2 hooks into `libminecraftpe.so` at load time. It **must** be loaded **after** `minecraftpe` or the hooks will silently fail.
+
+### Exact smali to add
+
+Insert these two lines at the end of the existing `<clinit>` method, right after the `minecraftpe` loadLibrary call and before `return-void`:
+
+```smali
+    const-string v0, "fusembl2"
+
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+```
+
+### Full `<clinit>` example (Minecraft 1.21.x)
+
+```smali
+.method public static constructor <clinit>()V
+    .registers 2
+
+    const-string v0, "MCPE"
+
+    const-string v1, "c++_shared"
+    invoke-static {v1}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+    :try_start_7
+    const-string v1, "maesdk"
+    invoke-static {v1}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+    :try_end_c
+    .catch Ljava/lang/UnsatisfiedLinkError; {:try_start_7 .. :try_end_c} :catch_d
+    goto :goto_12
+
+    :catch_d
+    const-string v1, "maesdk library not found. This is expected if we\'re not in Edu mode"
+    invoke-static {v0, v1}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I
+
+    :goto_12
+    const-string v1, "HttpClient.Android"
+    invoke-static {v1}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+    :try_start_17
+    const-string v1, "PlayFabMultiplayer"
+    invoke-static {v1}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+    :try_end_1c
+    .catch Ljava/lang/UnsatisfiedLinkError; {:try_start_17 .. :try_end_1c} :catch_1d
+    goto :goto_22
+
+    :catch_1d
+    const-string v1, "playfabmultiplayer library not found."
+    invoke-static {v0, v1}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I
+
+    :goto_22
+    const-string v0, "fmod"
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+    const-string v0, "minecraftpe"
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+    # ── MBL2 shader loader (must be AFTER minecraftpe) ──
+    const-string v0, "fusembl2"
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+    return-void
+.end method
+```
+
+### Common mistakes to avoid
+
+| ❌ Don't | Why |
+|---|---|
+| Load in `onCreate()` | Blocks the Activity lifecycle — can break popups, Xbox sign-in, and cause ANR |
+| Load before `minecraftpe` | MBL2 hooks into `libminecraftpe.so` — it must already be in memory |
+| Add UI/View/Dialog code in smali | MBL2 is headless — it needs zero Java-side UI |
+| Override `onResume`/`onPause`/`onStop` | Breaks Android lifecycle flow — causes popup and toast failures |
+| Load the library more than once | `<clinit>` runs exactly once per classloader — no duplicates needed |
