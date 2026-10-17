@@ -203,19 +203,20 @@ fn find_lib<'a>(target_name: &str) -> Option<plt_rs::LoadedLibrary<'a>> {
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
-/// The captured ResourcePackManager instance, set once by the rpm_ctor hook.
+/// The current ResourcePackManager instance, updated each time MC creates a new one.
 pub static PACKM_OBJ: Mutex<Option<ResourcePackManager>> = Mutex::new(None);
 
 hook_fn! {
     fn rpm_ctor(this: *mut libc::c_void, unk1: usize, unk2: usize, needs_init: bool) -> *mut libc::c_void = {
         use crate::loader::ResourcePackManager;
         use crate::LockResultExt;
-        log::info!("rpm_ctor called");
+        log::info!("rpm_ctor called (this={:?}, needs_init={})", this, needs_init);
         let result = call_original(this, unk1, unk2, needs_init);
-        *crate::PACKM_OBJ.lock().ignore_poison() = Some(ResourcePackManager::wrap(this));
-        // Disable the hook — we only need the pointer once
-        self_disable();
-        log::info!("rpm_ctor done");
+        if needs_init {
+            *crate::PACKM_OBJ.lock().ignore_poison() = Some(ResourcePackManager::wrap(this));
+            log::info!("rpm_ctor: captured new ResourcePackManager");
+        }
+        log::info!("rpm_ctor done (needs_init={})", needs_init);
         result
     }
 }
