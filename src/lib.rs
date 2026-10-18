@@ -14,7 +14,6 @@ use atoi::FromRadix16;
 use plt_rs::DynamicLibrary;
 use tinypatscan::Pattern;
 
-#[cfg(target_arch = "aarch64")]
 const RPMC_PATTERNS: [Pattern; 5] = [
     // v26.50
     Pattern::from_str("?? ?? ?? D1 ?? ?? ?? A9 ?? ?? ?? F9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? 91 ?? ?? ?? D5 F6 03 03 2A F5 03 02 AA ?? ?? ?? F9 F3 03 00 AA"),
@@ -26,24 +25,6 @@ const RPMC_PATTERNS: [Pattern; 5] = [
     Pattern::from_str("FF 83 02 D1 FD 7B 06 A9 FD 83 01 91 F8 5F 07 A9 F6 57 08 A9 F4 4F 09 A9 58 D0 3B D5 F6 03 03 2A 08 17 40 F9 F5 03 02 AA F3 03 00 AA A8 83 1F F8 28 10 40 F9 28 01 00 B4"),
     // 1.19.50 – 1.21.50
     Pattern::from_str("FF 03 03 D1 FD 7B 07 A9 FD C3 01 91 F9 43 00 F9 F8 5F 09 A9 F6 57 0A A9 F4 4F 0B A9 59 D0 3B D5 F6 03 03 2A 28 17 40 F9 F5 03 02 AA F3 03 00 AA A8 83 1F F8 28 10 40 F9"),
-];
-
-#[cfg(target_arch = "arm")]
-const RPMC_PATTERNS: [Pattern; 2] = [
-    // 1.21.120.4
-    Pattern::from_str(
-        "F0 B5 03 AF 2D E9 00 0F 8B B0 82 46 DF F8 ?? ?? 9B 46 91 46 78 44 00 68 00 68 0A 90",
-    ),
-    // 1.21.110 – 1.19.50
-    Pattern::from_str(
-        "F0 B5 03 AF 2D E9 00 ?? ?? B0 ?? 46 ?? 48 98 46 92 46 78 44 00 68 00 68 ?? 90 08 69",
-    ),
-];
-
-#[cfg(target_arch = "x86_64")]
-const RPMC_PATTERNS: [Pattern; 2] = [
-    Pattern::from_str("55 41 57 41 56 41 55 41 54 53 48 83 EC ? 41 89 CF 49 89 D6 48 89 FB 64 48 8B 04 25 28 00 00 00 48 89 44 24 ? 48 8B 7E"),
-    Pattern::from_str("55 41 57 41 56 53 48 83 EC ? 41 89 CF 49 89 D6 48 89 FB 64 48 8B 04 25 28 00 00 00 48 89 44 24 ? 48 8B 7E"),
 ];
 
 pub fn setup_logging() {
@@ -137,8 +118,6 @@ fn find_signatures(signatures: &[Pattern], ranges: &[SimpleMapRange]) -> Option<
                 unsafe { core::slice::from_raw_parts(range.start as *const u8, range.size) };
             if let Some(offset) = sig.search(lib_bytes, tinypatscan::Algorithm::Simd) {
                 let addr = unsafe { lib_bytes.as_ptr().byte_add(offset) };
-                #[cfg(target_arch = "arm")]
-                let addr = unsafe { addr.offset(1) };
                 log::info!(
                     "Signature matched in {:x}-{:x} at offset {:x}",
                     range.start,

@@ -1,8 +1,5 @@
-// #[cfg(target_pointer_width = "64")]
 use std::{borrow::Cow, collections::HashMap};
 
-// #[cfg(target_pointer_width = "64")]
-// use plt_rs::elf64::{self, DynRela};
 use plt_rs::DynamicLibrary;
 use region::{protect_with_handle, Protection};
 
@@ -43,10 +40,6 @@ fn replace_plt_function(
     Ok(())
 }
 
-// /// Finding target function differs on 32 bit and 64 bit.
-// /// On 32 bit we want to check the relocations table only, opposed to the addend relocations table.
-// /// Additionally, we will fall back to the plt given it is an addendless relocation table.
-
 macro_rules! collect_entries {
     ($iter:ident,$syms:expr,$table:expr) => {
         $iter
@@ -58,37 +51,9 @@ macro_rules! collect_entries {
                     .map(|s| (s, e))
             })
             .flatten()
-        //            .collect()
     };
 }
 
-#[cfg(target_pointer_width = "32")]
-pub fn get_function_table<'a>(
-    dnlib: &'a DynamicLibrary,
-) -> Option<HashMap<Cow<'a, str>, &'a plt_rs::elf32::DynRel>> {
-    let string_table = dnlib.string_table();
-    let dyn_symbols = dnlib.symbols()?;
-    let mut hashmap = HashMap::new();
-    if let Some(dyn_relas) = dnlib.relocs() {
-        let iter = collect_entries!(dyn_relas, dyn_symbols, string_table);
-        hashmap.extend(iter);
-    }
-
-    if let Some(dyn_relas) = dnlib.plt_rel() {
-        let iter = collect_entries!(dyn_relas, dyn_symbols, string_table);
-        hashmap.extend(iter);
-    }
-    if hashmap.is_empty() {
-        None
-    } else {
-        Some(hashmap)
-    }
-}
-
-// /// Finding target function differs on 32 bit and 64 bit.
-// /// On 64 bit we want to check the addended relocations table only, opposed to the addendless relocations table.
-// /// Additionally, we will fall back to the plt given it is an addended relocation table.
-#[cfg(target_pointer_width = "64")]
 pub fn get_function_table<'a>(
     dnlib: &'a DynamicLibrary,
 ) -> Option<HashMap<Cow<'a, str>, &'a plt_rs::elf64::DynRela>> {

@@ -10,9 +10,7 @@ jobs:
     strategy:
       matrix:
         target: 
-          - x86_64-linux-android
-          - aarch64-linux-android          
-          - armv7-linux-androideabi
+          - aarch64-linux-android
     runs-on: ubuntu-latest
     permissions:
       contents: write

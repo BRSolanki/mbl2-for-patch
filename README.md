@@ -32,13 +32,14 @@ A well optimized loader for the block game, stripped of MB Loader app JNI bindin
 | `static mut` on `WANTED_ASSETS` | `LazyLock<Mutex<_>>` already provides interior mutability — `static mut` was wrong and unsafe |
 | Autofix / lightmap / texture LOD stubs | Were no-ops; dead code in Smali context |
 | Log level `Trace` → `Info` | `debug!`/`trace!` format strings bloat the binary and spam logcat |
+| Non-64bit archs (arm32, x86_64) | Broken and obsolete signatures removed; now exclusively 64-bit ARM |
 
 ## Fixed
 | Fixed | Details |
 |---|---|
 | **Crashes on unsupported MC versions** | All `.expect()` panics in `main()` and `hook_aasset()` replaced with graceful early-returns. With `panic=abort`, any unmatched signature or missing library would take down the entire Minecraft process. |
 | Memory leak in `AAsset_close` | `WANTED_ASSETS` HashMap entries were never removed, causing unbounded growth during a session |
-| **arm32 PLT hooks never worked** | `get_function_table` (32-bit) always returned `None` even after populating the hashmap — shaders never loaded on arm32 |
+| **Shader deactivation / stale RPM bug** | Fixed stale `ResourcePackManager` pointer on shader/pack switch (removed `self_disable()`, added `needs_init` guard) |
 | `get_buffer` held exclusive lock unnecessarily | Changed from `get_mut` to `get` — avoids exclusive lock on a read-only path |
 | `rem`/`rem64` silent integer underflow | Used `saturating_sub` instead of bare `-`. A past-end `SEEK_END` seek could make `position() > total`, causing a wrapping underflow and garbage return value |
 
@@ -57,19 +58,20 @@ A well optimized loader for the block game, stripped of MB Loader app JNI bindin
 | Removed 4 unused direct dependencies | Smaller dependency graph = smaller binary |
 
 # Supported platforms
-- Android arm64
-- Android arm32 *(PLT hook bug fixed — hooks now actually apply)*
-- Chromeos/android x86_64 (untested)
+- Android ARM64 (`aarch64-linux-android` / `arm64-v8a`)
+
+> [!NOTE]
+> All other architectures (32-bit ARM, x86_64) have been removed. Modern Minecraft versions run on 64-bit ARM, and older 32-bit/x86 signatures were obsolete and broken. Focus is now 100% on ARM64.
 
 # Building
 ## Requirements
-- Rust (latest as possible)
-- Your target android architecture's rust target installed
-- Ndk r25+ installed
+- Rust (latest stable)
+- Android target: `rustup target add aarch64-linux-android`
+- Android NDK r25+ installed
 
 ## Building the .so
-``` bash
-cargo build --release --target {android target triple here}
+```bash
+cargo build --release --target aarch64-linux-android
 ```
 
 # Injection
@@ -89,8 +91,7 @@ Add `libfusembl2.so` as a `DT_NEEDED` dependency to `libminecraftpe.so`. The And
 
 2. **Copy** the compiled `libfusembl2.so` into the APK's native lib directory:
    ```
-   lib/arm64-v8a/libfusembl2.so    # for arm64
-   lib/armeabi-v7a/libfusembl2.so  # for arm32
+   lib/arm64-v8a/libfusembl2.so    # for arm64-v8a
    ```
 
 3. **Patch** `libminecraftpe.so` to depend on it:
